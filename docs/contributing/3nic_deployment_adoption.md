@@ -348,3 +348,262 @@ make crc_storage
 make input
 make openstack
 ```
+
+> Once the deployment succeeds, you can log in into the CRC machine:  
+> ```ssh -i /home/ospng/.crc/machines/crc/id_ecdsa core@192.168.130.11```
+> and check that all IPs are correct, from there you should be able to ping containers/external VM IPs from wallaby deployment.
+
+### Convenience steps
+
+To make our life easier we can copy the deployment passwords we'll be using in the [backend services deployment phase of the data plane adoption](https://openstack-k8s-operators.github.io/data-plane-adoption/openstack/backend_services_deployment/).
+
+To copy the passwords you can do:  
+```  
+sudo scp stack@undercloud-0:~/overcloud-deploy/overcloud/overcloud-passwords.yaml ~/
+sudo chown ospng:ospng ~/overcloud-passwords.yaml
+```
+
+### Route networks
+
+In order to be able to adopt the MariaDB (later) you need to have connectivity to the internal api network from the baremetal machine (pasts steps were needed to connect the podified network into the wallaby network, now we need to connect the baremetal).
+```
+sudo ip link add link data name vlan20 type vlan id 20
+sudo ip addr add dev vlan20 172.17.1.222/24
+sudo ip link set up dev vlan20
+```
+
+## Adopting the dataplane
+
+At this stage we have the environment ready to start the actual adoption, we'll go through all the stages, with the instructions modifyied acording to our environment. For more detailed explanation you can check the dataplane adoption guide (links will be shared on each stept)
+
+### Backend services deployment
+
+More information [here](https://openstack-k8s-operators.github.io/data-plane-adoption/openstack/backend_services_deployment/)
+
+#### Setup passwords
+
+To set up all the passwords of openstack services we need to execute:  
+```  
+ADMIN_PASSWORD=$(cat ~/overcloud-passwords.yaml | grep ' AdminPassword:' | awk -F ': ' '{ print $2; }')
+CINDER_PASSWORD=$(cat ~/overcloud-passwords.yaml | grep ' CinderPassword:' | awk -F ': ' '{ print $2; }')
+GLANCE_PASSWORD=$(cat ~/overcloud-passwords.yaml | grep ' GlancePassword:' | awk -F ': ' '{ print $2; }')
+IRONIC_PASSWORD=$(cat ~/overcloud-passwords.yaml | grep ' IronicPassword:' | awk -F ': ' '{ print $2; }')
+NEUTRON_PASSWORD=$(cat ~/overcloud-passwords.yaml | grep ' NeutronPassword:' | awk -F ': ' '{ print $2; }')
+NOVA_PASSWORD=$(cat ~/overcloud-passwords.yaml | grep ' NovaPassword:' | awk -F ': ' '{ print $2; }')
+OCTAVIA_PASSWORD=$(cat ~/overcloud-passwords.yaml | grep ' OctaviaPassword:' | awk -F ': ' '{ print $2; }')
+PLACEMENT_PASSWORD=$(cat ~/overcloud-passwords.yaml | grep ' PlacementPassword:' | awk -F ': ' '{ print $2; }')
+```
+
+Once you have the variables set, we need to set them as an oc secret.
+
+```
+oc project openstack
+oc set data secret/osp-secret "AdminPassword=$ADMIN_PASSWORD"
+oc set data secret/osp-secret "CinderPassword=$CINDER_PASSWORD"
+oc set data secret/osp-secret "GlancePassword=$GLANCE_PASSWORD"
+oc set data secret/osp-secret "IronicPassword=$IRONIC_PASSWORD"
+oc set data secret/osp-secret "NeutronPassword=$NEUTRON_PASSWORD"
+oc set data secret/osp-secret "NovaPassword=$NOVA_PASSWORD"
+oc set data secret/osp-secret "OctaviaPassword=$OCTAVIA_PASSWORD"
+oc set data secret/osp-secret "PlacementPassword=$PLACEMENT_PASSWORD"
+```
+
+#### Deploy subset of OpenStackControlPlane
+
+In this stage we'll setup the DNS, MariaDB, Memcached and RabbitMQ services.  
+```
+oc apply -f - <<EOF
+apiVersion: core.openstack.org/v1beta1
+kind: OpenStackControlPlane
+metadata:
+  name: openstack
+spec:
+  secret: osp-secret
+  storageClass: local-storage
+
+  cinder:
+    enabled: false
+    template:
+      cinderAPI: {}
+      cinderScheduler: {}
+      cinderBackup: {}
+      cinderVolumes: {}
+
+  dns:
+    enabled: true
+    template:
+      externalEndpoints:
+      - ipAddressPool: ctlplane
+        loadBalancerIPs:
+        - 192.168.122.80
+      options:
+      - key: server
+        values:
+        - 192.168.122.1
+      replicas: 1
+
+  glance:
+    enabled: false
+    template:
+      glanceAPIInternal: {}
+      glanceAPIExternal: {}
+
+  horizon:
+    enabled: false
+    template: {}
+
+  ironic:
+    enabled: false
+    template:
+      ironicConductors: []
+
+  keystone:
+    enabled: false
+    template: {}
+
+  manila:
+    enabled: false
+    template:
+      manilaAPI: {}
+      manilaScheduler: {}
+      manilaShares: {}
+
+  mariadb:
+    templates:
+      openstack:
+        storageRequest: 500M
+
+  memcached:
+    enabled: true
+    templates:
+      memcached:
+        replicas: 1
+
+  neutron:
+    enabled: false
+    template: {}
+
+  nova:
+    enabled: false
+    template: {}
+
+  ovn:
+    enabled: false
+    template:
+      ovnController:
+        external-ids:
+          system-id: "random"
+          ovn-bridge: "br-int"
+          ovn-encap-type: "geneve"
+
+  placement:
+    enabled: false
+    template: {}
+
+  rabbitmq:
+    templates:
+      rabbitmq:
+        externalEndpoint:
+          loadBalancerIPs:
+          - 172.17.0.85
+          ipAddressPool: internalapi
+          sharedIP: false
+        replicas: 1
+      rabbitmq-cell1:
+        externalEndpoint:
+          loadBalancerIPs:
+          - 172.17.0.86**z**
+          ipAddressPool: internalapi
+          sharedIP: false
+        replicas: 1
+
+  telemetry:
+    enabled: false
+    template: {}
+EOF
+```
+
+### Stop Openstack Services
+
+More information [here](https://openstack-k8s-operators.github.io/data-plane-adoption/openstack/stop_openstack_services/)
+
+In this stage we'll stop all the APIs, in order to do that we'll connect into the undercloud-0 and stop all the openstack services.
+
+From the undercloud we'll do:
+```
+CONTROLLER1_SSH="ssh -o LogLevel=ERROR controller-0.ctlplane"
+CONTROLLER2_SSH="ssh -o LogLevel=ERROR controller-1.ctlplane"
+CONTROLLER3_SSH="ssh -o LogLevel=ERROR controller-2.ctlplane"
+
+ServicesToStop=("tripleo_horizon.service"
+                "tripleo_keystone.service"
+                "tripleo_cinder_api.service"
+                "tripleo_cinder_api_cron.service"
+                "tripleo_cinder_scheduler.service"
+                "tripleo_cinder_backup.service"
+                "tripleo_glance_api.service"
+                "tripleo_neutron_api.service"
+                "tripleo_nova_api.service"
+                "tripleo_placement_api.service")
+
+echo "Stopping systemd OpenStack services"
+for service in ${ServicesToStop[*]}; do
+    for i in {1..3}; do
+        SSH_CMD=CONTROLLER${i}_SSH
+        if [ ! -z "${!SSH_CMD}" ]; then
+            echo "Stopping the $service in controller $i"
+            if ${!SSH_CMD} sudo systemctl is-active $service; then
+                ${!SSH_CMD} sudo systemctl stop $service
+            fi
+        fi
+    done
+done
+
+echo "Checking systemd OpenStack services"
+for service in ${ServicesToStop[*]}; do
+    for i in {1..3}; do
+        SSH_CMD=CONTROLLER${i}_SSH
+        if [ ! -z "${!SSH_CMD}" ]; then
+            echo "Checking status of $service in controller $i"
+            if ! ${!SSH_CMD} systemctl show $service | grep ActiveState=inactive >/dev/null; then
+               echo "ERROR: Service $service still running on controller $i"
+            fi
+        fi
+    done
+done
+```
+
+In this guide we'll not be stopping the pacemaker ressources, as we'll use those IPs later during other services adoption.
+
+### MariaDB adoption
+
+More information [here](https://openstack-k8s-operators.github.io/data-plane-adoption/openstack/mariadb_copy/)
+
+It's better to create first the adoption-db folder before doing all the pre-checks:  
+```
+mkdir ~/adoption-db
+cd ~/adoption-db
+```
+
+#### Variables
+
+In order to konw which SOURCE_MARIADB_IP has your environment, you can connect to the undercloud and do:  
+```
+for i in `seq 0 2`; do
+  ssh -o LogLevel=ERROR controller-$i.ctlplane ip -br -c a s | grep vlan20;
+done
+```
+And use the IP that has /32 on it (this IP is the one given by the pacemaker, hence the reason we did not stop it).
+
+```
+PODIFIED_MARIADB_IP=$(oc get -o yaml pod mariadb-openstack | grep podIP: | awk '{ print $2; }')
+MARIADB_IMAGE=quay.io/podified-antelope-centos9/openstack-mariadb:current-podified
+
+SOURCE_DB_ROOT_PASSWORD=$(cat ~/overcloud-passwords.yaml | grep ' MysqlRootPassword:' | awk -F ': ' '{ print $2; }')
+PODIFIED_DB_ROOT_PASSWORD=$(oc get -o json secret/osp-secret | jq -r .data.DbRootPassword | base64 -d)
+
+# Replace with your environment's MariaDB IP:
+SOURCE_MARIADB_IP=172.17.1.140
+```
+
+Once the variables are setted, you can follow the pre-checks and the data-copy from the [guide](https://openstack-k8s-operators.github.io/data-plane-adoption/openstack/mariadb_copy/) normally.
