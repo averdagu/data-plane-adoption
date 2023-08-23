@@ -151,50 +151,9 @@ sudo ip a add 192.168.24.10/24 dev enp7s0
 Now the CRC VM is connected to the same networks as our Wallaby environment.   
 But we can't reach the internal_api endpoints on Wallaby, since they use vlans on the data network, and the crc machine has no vlan configuration yet. In order to accomplish that we'll need to modify some scripts. 
 
-## I have problems writting this section, approach 1:
+### Modify Openstack deployment to adapt it to the new NICs
 
-First we're going to modify the script located at:  
-```
-/home/ospng/install_yamls/scripts/gen-nncp.sh
-```
-
-The different modifications that we'll do are:   
-
-- Add correct IPs to adapt it to our 3-nic deployment
-- Add 3 new variables to match the names of the new added NICs
-- Modify the Makefile to handle new variable names
-
-
-#### Add correct IPs
-
-We need to modify the IP configured on the interface with vlan20, that has **internalapi vlan interface** as description.
-
-This interface uses the network 172.17.0.0/24 but on our environment **this IP needs to be changed to 172.17.1.${IP_ADDRESS_SUFIX}/24**
-
-
-#### Add new NICs
-
-Right now script only handles one single interface, called $INTERFACE, which will have the value: enp6s0, as can be seen on the Makefile (located at install_yamls)
-
-We need to add variables for the 3 new NICs that we created previously. This new variables will be:  
-```
-echo INTERFACE DATA ${INTERFACE_DATA}
-echo INTERFACE MANAGEMENT ${INTERFACE_MANAGEMENT}
-echo INTERFACE EXTERNAL ${INTERFACE_EXTERNAL}
-```
-
-_This interfaces values will be provided on the Makefile_
-
-Now that we have the variables that will contain the new NIC names, we need to use them on the interfaces definition.
-
-**INTERFACE_DATA**: 
-
-- Will be used on the interface handling the INTERNALAPI. On this item we'll change $INTERFACE for $INTERFACE_DATA.
-- Also this interface will be used on the interface handling STORAGE VLAN INTERFACE. On this item we'll change again the $INTERFACE for $INTERFACE_DATA. Once this is done, we need to **modify the VLAN tag**. It is using vlan 21, but on our wallaby deployment the vlan 40 is used. So we need to modify the vlan tag also. And finally the IP used for this interface is 172.18.0.${IP_ADDRESS_SUFFIX}, but on our deployment this network has the IP 172.17.4.0/24, so we need to modify also the IP.
-
-**TODO: Add also INTERFACE_MANAGEMENT and INTERFACE_EXTERNAL**
-
-## Approach 2:
+#### NNCP
 
 During the installation of the "podified openstack" one of the stages is to configure all the interfaces and vlans from the CRC VM. This stage will be done by the target **nncp**, which will be triger by **make openstack**.
 
@@ -202,7 +161,7 @@ The ```make nncp``` basically will run the gen-nncp.sh and will consume the CR c
 
 In order to incorporate the newly added NICs we will modify the gen-nncp.sh as well as the Makefile.
 
-#### Makefile
+##### Makefile
 
 The modifications into the Makefile will be short and simple. We'll add 3 new variables that will contain the name of the new NICs.
 
@@ -224,7 +183,7 @@ nncp: export INTERFACE_EXTERNAL=${NNCP_INTERFACE_EXT}
 
 And with that all the modifications on the Makefile are done (for this stage).
 
-#### gen-nncp.sh
+##### gen-nncp.sh
 
 We need to modify this script in order to use the newly created variables as well as to fix the IPs and vlans used, since the defaults are different from the ones used on the wallaby deployment, and since we're adopting the OSP 17.1 wallaby deployment to the Podified CP, the podified CP needs to use the same layout.
 
@@ -262,14 +221,14 @@ The first one will be _internalapi vlan interface_:
 The second one will be the next one, _storage vlan interface_:
 
 - We need to change the IP used, from 172.18.0.x to 172.17.3.x
-- We need to change the name, as it's using $INTERFACE but we need to use $INTERFACE_MANAGEMENT. Also we need to modify the vlan tag, instead of using .21 we need to use .30, so the final result will be: "name: ${INTERFACE_MANAGEMENT}.30"
+- We need to change the name, as it's using $INTERFACE but we need to use \$INTERFACE_MANAGEMENT. Also we need to modify the vlan tag, instead of using .21 we need to use .30, so the final result will be: "name: ${INTERFACE_MANAGEMENT}.30"
 - We need to change the vlan.base-iface, that is using again $INTERFACE instead of $INTERFACE_MANAGEMENT
 - Finally we need to change the vlan.id, from 21 to 30
 
 Finally the next one, the _tenant vlan interface_:
 
 - We need to change the IP used, since it's using 172.19.0.x and wallaby uses 172.17.2.x
-- - We need to change the name, as it's using $INTERFACE but we need to use $INTERFACE_MANAGEMENT. Also we need to modify the vlan tag, instead of using .21 we need to use .50. So the final result will be: "name: ${INTERFACE_MANAGEMENT}.50"
+- - We need to change the name, as it's using $INTERFACE but we need to use \$INTERFACE_MANAGEMENT. Also we need to modify the vlan tag, instead of using .21 we need to use .50. So the final result will be: "name: ${INTERFACE_MANAGEMENT}.50"
 - We need to change the vlan.base-iface, that is using again $INTERFACE instead of $INTERFACE_MANAGEMENT
 - Finally we need to change the vlan.id, from 21 to 50
 
@@ -291,4 +250,101 @@ The section added should be:
       name: ${INTERFACE_DATA}
       state: up
       type: ethernet
+```
+
+#### NETTAT
+
+Once the script is modified, CRC VM should be configured correctly once we run the make command (not yet), but we're missing on modifying the podified networks that they will be created (they need to be the same as the wallaby environment).
+  
+In order to acomplish that, we'll need to modify the target **netattach**. This target will create the NAD (Network Attachment Definition) CR that will define the networks used on the podified control plane.
+
+In this step we'll also need to modify the Makefile and **scripts/gen-nettat.sh** with the correct IP and range for each network as well as the interfaces.
+
+##### Makefile
+
+As we did on the nncp stage, we'll add the interfaces on the netattach stage by adding this code into the netattach section:  
+```
+netattach: export INTERFACE_DATA=${NNCP_INTERFACE_DATA}
+netattach: export INTERFACE_MANAGEMENT=${NNCP_INTERFACE_MGMNT}
+netattach: export INTERFACE_EXT=${NNCP_INTERFACE_EXT}
+```
+
+##### gen-nettat.sh
+
+The networks definitions that we're about to change will determine the free IP range that can be assigned to new pods, on the wallaby also exist an IP range to allocate new IPs, it would be best if those ranges doesn't overlap. In order to see which range Wallaby is using, connect to the undercloud (```sudo ssh stack@undercloud-0```) and check file: ```~/virt/network/network_data_v2.yaml```.
+
+- ctlplane: This network shouldn't be used on our specific case, so we'll leave at it is.
+- internalapi: 
+    - We'll change the network used from 172.17.0. to 172.17.1 (on range, range_start, and range_end).
+    - For the range, instead of using [30, 70] we'll be using [150, 190] (Wallaby uses [10, 149]). 
+    - Finally change $INTERFACE for $INTERFACE_DATA
+- storage:
+    - We'll change the network used from 172.18.0. to 172.17.3 (on range, range_start, and range_end).
+    - For the range, instead of using [30, 70] we'll be using [150, 190] (Wallaby uses [10, 149]). 
+    - Change the vlan .21 for .30 (On master option)
+    - Finally change $INTERFACE for $INTERFACE_MANAGEMENT
+- tenant:
+    - We'll change the network used from 172.19.0. to 172.17.2 (on range, range_start, and range_end).
+    - For the range, instead of using [30, 70] we'll be using [150, 190] (Wallaby uses [10, 149]). 
+    - Change the vlan .22 for .50 (On master option)
+    - Finally change $INTERFACE for $INTERFACE_MANAGEMENT
+
+#### METALLB
+
+Metallb will be the pod in charge of assigning those IPs that will be attached to a service, hence will be the same IP regardless of the restarts of the pods. So we'll need to modify, again, the IP network, range and interface used.
+
+As well as the last section, we need to use an IP range that it's not use by anyone (nor netatt, nor wallaby).
+
+##### Makefile
+
+As we did on the nncp and netatt stage, we'll add the interfaces on the metallb stage by adding this code into the metallb section:  
+```
+metallb: export INTERFACE_DATA=${NNCP_INTERFACE_DATA}
+metallb: export INTERFACE_MANAGEMENT=${NNCP_INTERFACE_MGMNT}
+metallb: export INTERFACE_EXT=${NNCP_INTERFACE_EXT}
+```
+
+##### gen-olm-metallb.sh
+
+We need to adapt the networks and the range, as we did on the last two sections. So we'll be doing the modificatins to the ```${DEPLOY_DIR}/ipaddresspools.yaml``` part.
+
+- internalapi:
+    - Modify range to 172.17.1.190-172.17.1.200
+- storage:
+    - Modify range to 172.17.3.190-172.17.3.200
+- tenant:
+    - Modify range to 172.17.2.190-172.17.2.200
+
+Once the ranges are modified, we need to modify the ```${DEPLOY_DIR}/l2advertisement.yaml``` part, to use the interfaces and the vlan correctly.
+
+- Internalapi:
+    - Modify ${INTERFACE} for ${INTERFACE_DATA}
+- storage:
+    - Modify ${INTERFACE} for ${INTERFACE_MANAGEMENT}
+    - Modify tag from .21 to .30
+- tenant:
+    - Modify ${INTERFACE} for ${INTERFACE_MANAGEMENT}
+    - Modify tag from .22 to .50
+
+#### METALLB_CONFIG
+
+Finally, the last target from openstack_prep (which configures de underlying network) is metallb_config, which calls again the gen-olm-metallb.sh. Since we have already modify it we only need to add the newly add variables (INTERFACE_DATA, etc) to the makefile.
+
+##### Makefile
+
+As always, add this code under the metallb_config section:
+```
+metallb_config: export INTERFACE_DATA=${NNCP_INTERFACE_DATA}
+metallb_config: export INTERFACE_MANAGEMENT=${NNCP_INTERFACE_MGMNT}
+metallb_config: export INTERFACE_EXT=${NNCP_INTERFACE_EXT}
+```
+
+### Openstack deployment
+
+After all the modifications are done, we go to the install_yamls directory, and we make the targets crc_storage, input and openstack:  
+```
+cd ~/install_yamls
+make crc_storage
+make input
+make openstack
 ```
