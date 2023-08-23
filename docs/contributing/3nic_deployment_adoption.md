@@ -607,3 +607,112 @@ SOURCE_MARIADB_IP=172.17.1.140
 ```
 
 Once the variables are setted, you can follow the pre-checks and the data-copy from the [guide](https://openstack-k8s-operators.github.io/data-plane-adoption/openstack/mariadb_copy/) normally.
+
+### OVN data migration
+
+More information [here](https://openstack-k8s-operators.github.io/data-plane-adoption/openstack/ovn_adoption/)
+
+In order to get the ```SOURCE_OVSDB_IP``` we'll execute this command in any wallaby controller:
+
+```
+sudo ovs-vsctl get Open_Vswitch . external_ids:ovn-remote | cut -d':' -f 2
+```
+
+So the variables would be:  
+```
+OVSDB_IMAGE=quay.io/podified-antelope-centos9/openstack-ovn-base:current-podified
+SOURCE_OVSDB_IP=172.17.1.49
+```
+
+Regarding COMPUTE_SSH and CONTROLLER_SSH variables, we'll define later, since we'll be using them from the undercloud node.
+
+#### Stop OVN northd on all controller nodes
+
+From the undercloud node we'll execute:  
+```
+CONTROLLER1_SSH="ssh -o LogLevel=ERROR controller-0.ctlplane"
+CONTROLLER2_SSH="ssh -o LogLevel=ERROR controller-1.ctlplane"
+CONTROLLER3_SSH="ssh -o LogLevel=ERROR controller-2.ctlplane"
+
+echo "Stopping OVN northd"
+for i in {1..3}; do
+  SSH_CMD=CONTROLLER${i}_SSH
+  if [ ! -z "${!SSH_CMD}" ]; then
+    echo "Stopping it on controller $i"
+    if ${!SSH_CMD} sudo systemctl is-active tripleo_ovn_cluster_northd.service; then
+       ${!SSH_CMD} sudo systemctl stop tripleo_ovn_cluster_northd.service
+    fi
+  fi
+done
+```
+
+Once northd services are stoped we can backup OVN databases with:  
+```
+client="podman run -i --rm --userns=keep-id -u $UID -v $PWD:$PWD:z,rw -w $PWD $OVSDB_IMAGE ovsdb-client"
+${client} backup tcp:$SOURCE_OVSDB_IP:6641 > ovs-nb.db
+${client} backup tcp:$SOURCE_OVSDB_IP:6642 > ovs-sb.db
+```
+
+Once it's backed up, we start the OVN database services:  
+```
+oc patch openstackcontrolplane openstack --type=merge --patch '
+spec:
+  ovn:
+    enabled: true
+    template:
+      ovnDBCluster:
+        ovndbcluster-nb:
+          containerImage: quay.io/podified-antelope-centos9/openstack-ovn-nb-db-server:current-podified
+          dbType: NB
+          storageRequest: 10G
+          networkAttachment: internalapi
+        ovndbcluster-sb:
+          containerImage: quay.io/podified-antelope-centos9/openstack-ovn-sb-db-server:current-podified
+          dbType: SB
+          storageRequest: 10G
+          networkAttachment: internalapi
+'
+```
+
+Once pods are running we can fetch podified IP and upgrade database schema for the backup files:  
+```
+PODIFIED_OVSDB_NB_IP=$(kubectl get po ovsdbserver-nb-0 -o jsonpath='{.metadata.annotations.k8s\.v1\.cni\.cncf\.io/network-status}' | jq 'map(. | select(.name=="openstack/internalapi"))[0].ips[0]' | tr -d '"')
+PODIFIED_OVSDB_SB_IP=$(kubectl get po ovsdbserver-sb-0 -o jsonpath='{.metadata.annotations.k8s\.v1\.cni\.cncf\.io/network-status}' | jq 'map(. | select(.name=="openstack/internalapi"))[0].ips[0]' | tr -d '"')
+podman run -it --rm --userns=keep-id -u $UID -v $PWD:$PWD:z,rw -w $PWD $OVSDB_IMAGE bash -c "ovsdb-client get-schema tcp:$PODIFIED_OVSDB_NB_IP:6641 > ./ovs-nb.ovsschema && ovsdb-tool convert ovs-nb.db ./ovs-nb.ovsschema"
+podman run -it --rm --userns=keep-id -u $UID -v $PWD:$PWD:z,rw -w $PWD $OVSDB_IMAGE bash -c "ovsdb-client get-schema tcp:$PODIFIED_OVSDB_SB_IP:6642 > ./ovs-sb.ovsschema && ovsdb-tool convert ovs-sb.db ./ovs-sb.ovsschema"
+```
+
+#### Switch ovn-remote on compute nodes
+
+In order to modify to which nb/sb databases points the ovn-controller on the computes we'll check which podified SB IP are we using by:  
+```
+echo $PODIFIED_OVSDB_SB_IP
+```
+And then we'll ssh into the undercloud and we'll execute the following command:  
+```
+PODIFIED_OVSDB_SB_IP=172.17.1.150 
+COMPUTE1_SSH="ssh -o LogLevel=ERROR compute-0.ctlplane"
+COMPUTE2_SSH="ssh -o LogLevel=ERROR compute-1.ctlplane"
+
+echo "Switch OVN-remote on computes"
+for i in {1..2}; do
+  SSH_CMD=COMPUTE${i}_SSH
+  if [ ! -z "${!SSH_CMD}" ]; then
+    ${!SSH_CMD} sudo podman exec -it ovn_controller ovs-vsctl set open . external_ids:ovn-remote=tcp:$PODIFIED_OVSDB_SB_IP:6642;
+  fi
+done
+```
+
+In order to reset RAFT state, in the same terminal where we switch ovn-remote:  
+```
+COMPUTE1_SSH="ssh -o LogLevel=ERROR compute-0.ctlplane"
+COMPUTE2_SSH="ssh -o LogLevel=ERROR compute-1.ctlplane"
+
+echo "Restart Raft state on computes"
+for i in {1..2}; do
+  SSH_CMD=COMPUTE${i}_SSH
+  if [ ! -z "${!SSH_CMD}" ]; then
+    ${!SSH_CMD} sudo podman exec -it ovn_controller ovn-appctl -t ovn-controller sb-cluster-state-reset;
+  fi
+done
+```
