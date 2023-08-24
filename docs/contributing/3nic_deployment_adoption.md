@@ -745,6 +745,7 @@ spec:
 ```
 
 > _WARNING:_ The cleanup services that is shown at the list doesn't seem to work well, but the end endpoint list seems to be the correct one.
+> _WARNING2: Even if it works correctly, openstack enpoint list still shows heat and heat-cfg endpoints. Is this correct?
 
 ### Neutron adoption
 
