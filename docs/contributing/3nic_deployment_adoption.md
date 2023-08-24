@@ -740,7 +740,7 @@ spec:
       - endpoint: internal
         ipAddressPool: internalapi
         loadBalancerIPs:
-        - 172.17.0.80
+        - 172.17.0.190
 '
 ```
 
