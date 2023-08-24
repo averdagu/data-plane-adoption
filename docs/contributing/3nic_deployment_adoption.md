@@ -9,20 +9,20 @@ Once it has been deployed make sure machine has enough ressources (disk, ram and
 ## Lab preparation
 Follow the section that you can find [here](https://docs.google.com/document/d/15x930hfe0qh9QZ6wU8lmW-3SXLwajzmSi8XBk88o6aw/edit) on the _Lab machine preparation_ section.
 
-> _Warning 1_: Is it possible that you encounter this:  
+> _Warning 1_: Is it possible that you encounter this:
 > ```
 > Error: Unable to find a match: guestfs-tools
 > ```
 > In order to solve it, install **libguestfs-tools**.
 
-> _WARNING 2_: If you encounter problems while doing:   
+> _WARNING 2_: If you encounter problems while doing:
 >
 > ```
 > GO111MODULE=on go install sigs.k8s.io/kustomize/kustomize/v5@latest
-> ```   
-> 
+> ```
+>
 > Update go using [update-golang](GO111MODULE=on go install sigs.k8s.io/kustomize/kustomize/v5@latest)
->    
+>
 > ```
 > git clone https://github.com/udhos/update-golang
 > cd update-golang
@@ -35,7 +35,7 @@ In this section we'll create the CRC machine and configure it acording to our ne
 
 ### Environment prep
 
-Clone install_yamls:  
+Clone install_yamls:
 ```
 git clone https://github.com/openstack-k8s-operators/install_yamls.git
 ```
@@ -50,7 +50,7 @@ make download_tools
 ### Deployment of CRC machine
 
 ```
-cd install_yamls/devsetup
+cd ~/install_yamls/devsetup
 PULL_SECRET=$HOME/pull-secret.txt CPUS=12 MEMORY=40000 DISK=100 make crc
 
 eval $(crc oc-env)
@@ -91,7 +91,7 @@ And look to the last interface that the VM has. Should look like this:
     </interface>
 ```
 
-After this block, we need to add the 3 new interfaces by adding:  
+After this block, we need to add the 3 new interfaces by adding:
 ```
     <interface type='network'>
       <mac address='52:54:00:d8:23:03'/>
@@ -114,7 +114,7 @@ After this block, we need to add the 3 new interfaces by adding:
 ```
 > _The source network will match the 3 different networks explained earlier._
 
-Once VM is modified we can start it again:  
+Once VM is modified we can start it again:
 ```
 sudo virsh start crc
 ```
@@ -125,13 +125,13 @@ ssh -i /home/ospng/.crc/machines/crc/id_ecdsa core@192.168.130.11
 ```
 > More info on how to connect to the CRC VM [here](https://www.itsfullofstars.de/2021/07/ssh-to-red-hat-crc-vm/)
 
-Once inside the VM we can list the physical NICs by doing:  
+Once inside the VM we can list the physical NICs by doing:
 ```
 ip -br -c a s | grep enp
 ```
 > ip -br (brief) -c (color) a (address) s (show)
 
-The output should look like this:  
+The output should look like this:
 ```
 [core@crc-74q6p-master-0 ~]$ ip -br -c a s | grep enp
 enp2s0           UP             192.168.130.11/24 fe80::9a25:ab6c:bf33:6807/64
@@ -141,15 +141,15 @@ enp8s0           UP             172.16.0.79/24 fe80::2a9d:f45a:413c:111f/64
 enp9s0           UP             10.0.0.80/24 2620:52:0:13b8::fe:1e/128 2620:52:0:13b8:7bf9:5121:a0ce:254e/64 fe80::da85:6c62:b522:fa03/64
 ```
 
-As stated before, enp8s0 and enp9s0 have IP since networks management and external has DHCP, but data don't, so we'll add the IP manually by doing:  
+As stated before, enp8s0 and enp9s0 have IP since networks management and external has DHCP, but data don't, so we'll add the IP manually by doing:
 ```
 sudo ip a add 192.168.24.10/24 dev enp7s0
 ```
-> Make sure that that IP is not used by anyone.   
+> Make sure that that IP is not used by anyone.
 > Also, the IP on enp7s0 is not persistent, so it'll be removed if the VM is rebooted.
 
-Now the CRC VM is connected to the same networks as our Wallaby environment.   
-But we can't reach the internal_api endpoints on Wallaby, since they use vlans on the data network, and the crc machine has no vlan configuration yet. In order to accomplish that we'll need to modify some scripts. 
+Now the CRC VM is connected to the same networks as our Wallaby environment.
+But we can't reach the internal_api endpoints on Wallaby, since they use vlans on the data network, and the crc machine has no vlan configuration yet. In order to accomplish that we'll need to modify some scripts.
 
 ### Modify Openstack deployment to adapt it to the new NICs
 
@@ -235,7 +235,7 @@ Finally the next one, the _tenant vlan interface_:
 Once all the vlans are configured, we'll need to add a new section, to configure our INTERFACE_DATA, since the
 data network doesn't have a DHCP, the IP added by hand keeps disapearing, maybe with this will be persistend (at least during VM lifetime).
 
-The section added should be:  
+The section added should be:
 ```
     - description: Configuring ${INTERFACE_DATA}
       ipv4:
@@ -255,14 +255,14 @@ The section added should be:
 #### NETTAT
 
 Once the script is modified, CRC VM should be configured correctly once we run the make command (not yet), but we're missing on modifying the podified networks that they will be created (they need to be the same as the wallaby environment).
-  
+
 In order to acomplish that, we'll need to modify the target **netattach**. This target will create the NAD (Network Attachment Definition) CR that will define the networks used on the podified control plane.
 
 In this step we'll also need to modify the Makefile and **scripts/gen-nettat.sh** with the correct IP and range for each network as well as the interfaces.
 
 ##### Makefile
 
-As we did on the nncp stage, we'll add the interfaces on the netattach stage by adding this code into the netattach section:  
+As we did on the nncp stage, we'll add the interfaces on the netattach stage by adding this code into the netattach section:
 ```
 netattach: export INTERFACE_DATA=${NNCP_INTERFACE_DATA}
 netattach: export INTERFACE_MANAGEMENT=${NNCP_INTERFACE_MGMNT}
@@ -274,18 +274,18 @@ netattach: export INTERFACE_EXT=${NNCP_INTERFACE_EXT}
 The networks definitions that we're about to change will determine the free IP range that can be assigned to new pods, on the wallaby also exist an IP range to allocate new IPs, it would be best if those ranges doesn't overlap. In order to see which range Wallaby is using, connect to the undercloud (```sudo ssh stack@undercloud-0```) and check file: ```~/virt/network/network_data_v2.yaml```.
 
 - ctlplane: This network shouldn't be used on our specific case, so we'll leave at it is.
-- internalapi: 
+- internalapi:
     - We'll change the network used from 172.17.0. to 172.17.1 (on range, range_start, and range_end).
-    - For the range, instead of using [30, 70] we'll be using [150, 190] (Wallaby uses [10, 149]). 
+    - For the range, instead of using [30, 70] we'll be using [150, 190] (Wallaby uses [10, 149]).
     - Finally change $INTERFACE for $INTERFACE_DATA
 - storage:
     - We'll change the network used from 172.18.0. to 172.17.3 (on range, range_start, and range_end).
-    - For the range, instead of using [30, 70] we'll be using [150, 190] (Wallaby uses [10, 149]). 
+    - For the range, instead of using [30, 70] we'll be using [150, 190] (Wallaby uses [10, 149]).
     - Change the vlan .21 for .30 (On master option)
     - Finally change $INTERFACE for $INTERFACE_MANAGEMENT
 - tenant:
     - We'll change the network used from 172.19.0. to 172.17.2 (on range, range_start, and range_end).
-    - For the range, instead of using [30, 70] we'll be using [150, 190] (Wallaby uses [10, 149]). 
+    - For the range, instead of using [30, 70] we'll be using [150, 190] (Wallaby uses [10, 149]).
     - Change the vlan .22 for .50 (On master option)
     - Finally change $INTERFACE for $INTERFACE_MANAGEMENT
 
@@ -297,7 +297,7 @@ As well as the last section, we need to use an IP range that it's not use by any
 
 ##### Makefile
 
-As we did on the nncp and netatt stage, we'll add the interfaces on the metallb stage by adding this code into the metallb section:  
+As we did on the nncp and netatt stage, we'll add the interfaces on the metallb stage by adding this code into the metallb section:
 ```
 metallb: export INTERFACE_DATA=${NNCP_INTERFACE_DATA}
 metallb: export INTERFACE_MANAGEMENT=${NNCP_INTERFACE_MGMNT}
@@ -341,7 +341,7 @@ metallb_config: export INTERFACE_EXT=${NNCP_INTERFACE_EXT}
 
 ### Openstack deployment
 
-After all the modifications are done, we go to the install_yamls directory, and we make the targets crc_storage, input and openstack:  
+After all the modifications are done, we go to the install_yamls directory, and we make the targets crc_storage, input and openstack:
 ```
 cd ~/install_yamls
 make crc_storage
@@ -349,7 +349,7 @@ make input
 make openstack
 ```
 
-> Once the deployment succeeds, you can log in into the CRC machine:  
+> Once the deployment succeeds, you can log in into the CRC machine:
 > ```ssh -i /home/ospng/.crc/machines/crc/id_ecdsa core@192.168.130.11```
 > and check that all IPs are correct, from there you should be able to ping containers/external VM IPs from wallaby deployment.
 
@@ -357,8 +357,8 @@ make openstack
 
 To make our life easier we can copy the deployment passwords we'll be using in the [backend services deployment phase of the data plane adoption](https://openstack-k8s-operators.github.io/data-plane-adoption/openstack/backend_services_deployment/).
 
-To copy the passwords you can do:  
-```  
+To copy the passwords you can do:
+```
 sudo scp stack@undercloud-0:~/overcloud-deploy/overcloud/overcloud-passwords.yaml ~/
 sudo chown ospng:ospng ~/overcloud-passwords.yaml
 ```
@@ -382,8 +382,8 @@ More information [here](https://openstack-k8s-operators.github.io/data-plane-ado
 
 #### Setup passwords
 
-To set up all the passwords of openstack services we need to execute:  
-```  
+To set up all the passwords of openstack services we need to execute:
+```
 ADMIN_PASSWORD=$(cat ~/overcloud-passwords.yaml | grep ' AdminPassword:' | awk -F ': ' '{ print $2; }')
 CINDER_PASSWORD=$(cat ~/overcloud-passwords.yaml | grep ' CinderPassword:' | awk -F ': ' '{ print $2; }')
 GLANCE_PASSWORD=$(cat ~/overcloud-passwords.yaml | grep ' GlancePassword:' | awk -F ': ' '{ print $2; }')
@@ -410,7 +410,7 @@ oc set data secret/osp-secret "PlacementPassword=$PLACEMENT_PASSWORD"
 
 #### Deploy subset of OpenStackControlPlane
 
-In this stage we'll setup the DNS, MariaDB, Memcached and RabbitMQ services.  
+In this stage we'll setup the DNS, MariaDB, Memcached and RabbitMQ services.
 ```
 oc apply -f - <<EOF
 apiVersion: core.openstack.org/v1beta1
@@ -579,7 +579,7 @@ In this guide we'll not be stopping the pacemaker ressources, as we'll use those
 
 More information [here](https://openstack-k8s-operators.github.io/data-plane-adoption/openstack/mariadb_copy/)
 
-It's better to create first the adoption-db folder before doing all the pre-checks:  
+It's better to create first the adoption-db folder before doing all the pre-checks:
 ```
 mkdir ~/adoption-db
 cd ~/adoption-db
@@ -587,7 +587,7 @@ cd ~/adoption-db
 
 #### Variables
 
-In order to konw which SOURCE_MARIADB_IP has your environment, you can connect to the undercloud and do:  
+In order to konw which SOURCE_MARIADB_IP has your environment, you can connect to the undercloud and do:
 ```
 for i in `seq 0 2`; do
   ssh -o LogLevel=ERROR controller-$i.ctlplane ip -br -c a s | grep vlan20;
@@ -618,7 +618,7 @@ In order to get the ```SOURCE_OVSDB_IP``` we'll execute this command in any wall
 sudo ovs-vsctl get Open_Vswitch . external_ids:ovn-remote | cut -d':' -f 2
 ```
 
-So the variables would be:  
+So the variables would be:
 ```
 OVSDB_IMAGE=quay.io/podified-antelope-centos9/openstack-ovn-base:current-podified
 SOURCE_OVSDB_IP=172.17.1.49
@@ -628,7 +628,7 @@ Regarding COMPUTE_SSH and CONTROLLER_SSH variables, we'll define later, since we
 
 #### Stop OVN northd on all controller nodes
 
-From the undercloud node we'll execute:  
+From the undercloud node we'll execute:
 ```
 CONTROLLER1_SSH="ssh -o LogLevel=ERROR controller-0.ctlplane"
 CONTROLLER2_SSH="ssh -o LogLevel=ERROR controller-1.ctlplane"
@@ -646,14 +646,14 @@ for i in {1..3}; do
 done
 ```
 
-Once northd services are stoped we can backup OVN databases with:  
+Once northd services are stoped we can backup OVN databases with:
 ```
 client="podman run -i --rm --userns=keep-id -u $UID -v $PWD:$PWD:z,rw -w $PWD $OVSDB_IMAGE ovsdb-client"
 ${client} backup tcp:$SOURCE_OVSDB_IP:6641 > ovs-nb.db
 ${client} backup tcp:$SOURCE_OVSDB_IP:6642 > ovs-sb.db
 ```
 
-Once it's backed up, we start the OVN database services:  
+Once it's backed up, we start the OVN database services:
 ```
 oc patch openstackcontrolplane openstack --type=merge --patch '
 spec:
@@ -674,7 +674,7 @@ spec:
 '
 ```
 
-Once pods are running we can fetch podified IP and upgrade database schema for the backup files:  
+Once pods are running we can fetch podified IP and upgrade database schema for the backup files:
 ```
 PODIFIED_OVSDB_NB_IP=$(kubectl get po ovsdbserver-nb-0 -o jsonpath='{.metadata.annotations.k8s\.v1\.cni\.cncf\.io/network-status}' | jq 'map(. | select(.name=="openstack/internalapi"))[0].ips[0]' | tr -d '"')
 PODIFIED_OVSDB_SB_IP=$(kubectl get po ovsdbserver-sb-0 -o jsonpath='{.metadata.annotations.k8s\.v1\.cni\.cncf\.io/network-status}' | jq 'map(. | select(.name=="openstack/internalapi"))[0].ips[0]' | tr -d '"')
@@ -684,13 +684,13 @@ podman run -it --rm --userns=keep-id -u $UID -v $PWD:$PWD:z,rw -w $PWD $OVSDB_IM
 
 #### Switch ovn-remote on compute nodes
 
-In order to modify to which nb/sb databases points the ovn-controller on the computes we'll check which podified SB IP are we using by:  
+In order to modify to which nb/sb databases points the ovn-controller on the computes we'll check which podified SB IP are we using by:
 ```
 echo $PODIFIED_OVSDB_SB_IP
 ```
-And then we'll ssh into the undercloud and we'll execute the following command:  
+And then we'll ssh into the undercloud and we'll execute the following command:
 ```
-PODIFIED_OVSDB_SB_IP=172.17.1.150 
+PODIFIED_OVSDB_SB_IP=172.17.1.150
 COMPUTE1_SSH="ssh -o LogLevel=ERROR compute-0.ctlplane"
 COMPUTE2_SSH="ssh -o LogLevel=ERROR compute-1.ctlplane"
 
@@ -703,7 +703,7 @@ for i in {1..2}; do
 done
 ```
 
-In order to reset RAFT state, in the same terminal where we switch ovn-remote:  
+In order to reset RAFT state, in the same terminal where we switch ovn-remote:
 ```
 COMPUTE1_SSH="ssh -o LogLevel=ERROR compute-0.ctlplane"
 COMPUTE2_SSH="ssh -o LogLevel=ERROR compute-1.ctlplane"
