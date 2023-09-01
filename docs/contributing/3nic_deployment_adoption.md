@@ -505,14 +505,14 @@ spec:
       rabbitmq:
         externalEndpoint:
           loadBalancerIPs:
-          - 172.17.0.85
+          - 172.17.1.85
           ipAddressPool: internalapi
           sharedIP: false
         replicas: 1
       rabbitmq-cell1:
         externalEndpoint:
           loadBalancerIPs:
-          - 172.17.0.86**z**
+          - 172.17.1.86
           ipAddressPool: internalapi
           sharedIP: false
         replicas: 1
